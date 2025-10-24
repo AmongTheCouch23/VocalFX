@@ -1,11 +1,11 @@
-import sys, threading, time, numpy as np
+import sys, threading, numpy as np, pyaudio
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTextEdit, QComboBox, QSlider, QFileDialog, QMessageBox
 )
 from PyQt6.QtCore import Qt
-import pyaudio
-from audio_core import list_devices, compile_effect, load_effect, EFFECTS_DIR, record_chunk, play_chunk
+from audio_core import list_devices, compile_effect, EFFECTS_DIR, record_chunk, play_chunk
+
 
 class EffectEditor(QWidget):
     def __init__(self):
@@ -28,10 +28,8 @@ class EffectEditor(QWidget):
         for idx, name in inputs: self.in_box.addItem(name, idx)
         for idx, name in outputs: self.out_box.addItem(name, idx)
         dlayout = QHBoxLayout()
-        dlayout.addWidget(QLabel("Input:"))
-        dlayout.addWidget(self.in_box)
-        dlayout.addWidget(QLabel("Output:"))
-        dlayout.addWidget(self.out_box)
+        dlayout.addWidget(QLabel("Input:"));  dlayout.addWidget(self.in_box)
+        dlayout.addWidget(QLabel("Output:")); dlayout.addWidget(self.out_box)
         layout.addLayout(dlayout)
 
         glayout = QHBoxLayout()
@@ -62,6 +60,8 @@ class EffectEditor(QWidget):
         self.save_btn.clicked.connect(self.save_effect)
 
     def start_preview(self):
+        if self.running:
+            return
         self.running = True
         threading.Thread(target=self.preview_thread, daemon=True).start()
 
@@ -74,7 +74,7 @@ class EffectEditor(QWidget):
             in_idx = self.in_box.currentData()
             out_idx = self.out_box.currentData()
             code = self.text_area.toPlainText()
-            mod = load_effect_from_text(code)
+            mod = self._load_effect_from_text(code)
 
             params = {"gain": self.gain_slider.value()}
             instream = self.p.open(format=pyaudio.paFloat32, channels=1,
@@ -83,34 +83,48 @@ class EffectEditor(QWidget):
             outstream = self.p.open(format=pyaudio.paFloat32, channels=1,
                                     rate=RATE, output=True, output_device_index=out_idx,
                                     frames_per_buffer=CHUNK)
-
             self.status.setText("Previewing...")
+
             while self.running:
                 data = record_chunk(instream, CHUNK)
                 if hasattr(mod, "apply"):
-                    data = mod.apply(data, RATE, params)
+                    try:
+                        data = mod.apply(data, RATE, params)
+                    except Exception as e:
+                        print(f"[Preview Error] {e}")
                 play_chunk(outstream, data)
 
-            instream.close(); outstream.close()
+            instream.stop_stream(); instream.close()
+            outstream.stop_stream(); outstream.close()
             self.status.setText("Stopped.")
         except Exception as e:
             self.status.setText(f"Error: {e}")
 
     def save_effect(self):
+        src = self.text_area.toPlainText()
+        try:
+            mod = self._load_effect_from_text(src)
+            if not hasattr(mod, "apply"):
+                QMessageBox.warning(self, "Invalid", "No 'apply()' function defined.")
+                return
+        except Exception as e:
+            QMessageBox.warning(self, "Compile Error", f"Invalid code:\n{e}")
+            return
+
         name, _ = QFileDialog.getSaveFileName(self, "Save Effect", EFFECTS_DIR, "VocalEffect (*.vocaleffect)")
         if not name:
             return
-        src = self.text_area.toPlainText()
-        out_name = name.replace(".vocaleffect", "").split("/")[-1]
+        out_name = os.path.splitext(os.path.basename(name))[0]
         compile_effect(src, out_name)
         QMessageBox.information(self, "Compiled", f"Effect saved as {out_name}.vocaleffect")
+        self.status.setText(f"Saved: {out_name}.vocaleffect")
 
-def load_effect_from_text(code_str):
-    import marshal, types
-    code = compile(code_str, "<preview>", "exec")
-    mod = types.ModuleType("temp_effect")
-    exec(code, mod.__dict__)
-    return mod
+    def _load_effect_from_text(self, code_str):
+        import types
+        mod = types.ModuleType("temp_effect")
+        exec(compile(code_str, "<preview>", "exec"), mod.__dict__)
+        return mod
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
