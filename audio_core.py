@@ -23,16 +23,20 @@ def list_devices():
     return inputs, outputs
 
 def compile_effect(source_code: str, output_name: str):
-    code = compile(source_code, "<vocaleffect>", "exec")
-    bytecode = marshal.dumps(code)
-    with open(os.path.join(EFFECTS_DIR, output_name + ".vocaleffect"), "wb") as f:
-        f.write(bytecode)
+    path = os.path.join(EFFECTS_DIR, f"{output_name}.vocaleffect")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(source_code)
+    print(f"[Compiled] Saved text effect -> {path}")
+    return path
 
 def load_effect(path: str):
-    with open(path, "rb") as f:
-        code = marshal.loads(f.read())
+    import types
+    with open(path, "r", encoding="utf-8") as f:
+        code = f.read()
     mod = types.ModuleType("vocaleffect_module")
-    exec(code, mod.__dict__)
+    exec(compile(code, path, "exec"), mod.__dict__)
+    if not hasattr(mod, "apply"):
+        raise AttributeError(f"No 'apply' function defined in {path}")
     return mod
 
 def record_chunk(stream, chunk=1024):
